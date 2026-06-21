@@ -1,22 +1,14 @@
-@"
-# Virtual environment
+# Virtual environment - KHÔNG push
 .venv/
 venv/
 env/
+ENV/
 
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Environment files
-.env
-.env.*
-!.env.example
-
-# Streamlit secrets
-.streamlit/secrets.toml
 
 # IDE
 .vscode/
@@ -28,4 +20,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
-"@ | Set-Content .gitignore
+
+# Streamlit secrets
+.streamlit/secrets.toml
