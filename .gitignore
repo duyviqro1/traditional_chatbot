@@ -1,13 +1,11 @@
 # Virtual environment - KHÔNG push
 .venv/
-.env/
 venv/
 env/
 ENV/
 
 # Python cache
 __pycache__/
-.fastembed_cache/
 *.pyc
 *.pyo
 *.pyd

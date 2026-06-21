@@ -36,25 +36,13 @@ try:
     from key import TAVILY_API_KEY
 except ImportError:
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-try:
-    from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
-except ImportError:
-    KEY_FILE_QDRANT_CLOUD_API_KEY = None
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-QDRANT_URL = os.getenv(
-    "QDRANT_CLOUD_URL",
-    "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io",
-)
-QDRANT_COLLECTION = os.getenv("QDRANT_CLOUD_COLLECTION", "medical_docs")
-QDRANT_API_KEY = (
-    os.getenv("QDRANT_CLOUD_API_KEY")
-    or os.getenv("QDRANT_API_KEY")
-    or KEY_FILE_QDRANT_CLOUD_API_KEY
-)
-QDRANT_TIMEOUT = int(os.getenv("QDRANT_CLOUD_TIMEOUT", "120"))
+QDRANT_URL = "http://localhost:6333"
+QDRANT_COLLECTION = "medical_docs"
+QDRANT_API_KEY = "qdrant_api_key"
 SEARCH_K = 10
 WEB_SEARCH_K = 3
 ALLOWED_WEB_DOMAINS = [
@@ -151,9 +139,7 @@ KNOWN_DISEASE_TERMS = {
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-if not QDRANT_API_KEY:
-    raise RuntimeError("Missing QDRANT_CLOUD_API_KEY in environment or .env/key.py.")
-client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
+client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 qdrant = QdrantVectorStore(client=client, collection_name=QDRANT_COLLECTION, embedding=embeddings)
 try:
     tavily_search_tool = TavilySearch(
