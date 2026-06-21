@@ -3,4 +3,4 @@ OPENAI_API_KEY = "sk-proj-edsLrHPTUFdO5xAT2AiIusrJKCT5MkORkGQL6n1lVajXBBhWivWTIg
 QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6YWIyODMxYWYtOTc5MS00ZjhlLThmMGQtNDA4N2I1YjY4NDY4In0.VRYVIimFXav-ritZXyaYHiv5tLLB7JF6VycfpSjIwSs"
 TAVILY_API_KEY = "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"
 QDRANT_CLOUD_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6OTRhNzkwYzItMTA3OS00ZjA3LWE3NmMtMmRjNGJkZGU4ZDk2In0.fpLzOvXu2I2gGoa8iv5hBvJDCsqNOd0gvgyTvLcWTC0"
-DATABASE_URL = "postgresql://neondb_owner:npg_6MONX7jDwTLV@ep-solitary-scene-atqq09wd-pooler.c-9.us-east-1.aws.neon.tech/postgres_chatbot?sslmode=require&channel_binding=require"
+DATABASE_URL = "postgresql://neondb_owner:npg_spwT1ojXFt5L@ep-lucky-art-aoxpnhji-pooler.c-2.ap-southeast-1.aws.neon.tech/rag_chatbot?sslmode=require&channel_binding=require"

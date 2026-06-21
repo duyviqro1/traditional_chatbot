@@ -4,7 +4,17 @@ import os
 import sys
 from pathlib import Path
 import psycopg2
+from contextlib import contextmanager
 from langchain_core.messages import HumanMessage, AIMessage
+from psycopg2.pool import ThreadedConnectionPool
+
+def get_streamlit_secret(name, default=None):
+    try:
+        import streamlit as st
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
 
 env_path = Path(__file__).resolve().parent / ".env"
 sys.path.insert(0, str(env_path))
@@ -16,12 +26,46 @@ except ImportError:
 
 PG_URI = (
     os.getenv("DATABASE_URL")
+    or get_streamlit_secret("DATABASE_URL")
     or KEY_FILE_DATABASE_URL
     or "postgresql://admin:admin@127.0.0.1:5433/rag_lakehouse"
 )
+DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
+DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "5"))
+_db_pool = None
+
+
+def get_db_pool():
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = ThreadedConnectionPool(
+            DB_POOL_MIN_CONN,
+            DB_POOL_MAX_CONN,
+            dsn=PG_URI,
+        )
+    return _db_pool
+
+
+@contextmanager
+def get_db_connection():
+    pool = get_db_pool()
+    conn = pool.getconn()
+    close_connection = False
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        close_connection = True
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        pool.putconn(conn, close=close_connection or bool(conn.closed))
 
 def init_db():
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -111,7 +155,6 @@ def init_db():
                     EXCLUDED.last_session_number
                 )
             """)
-        conn.commit()
 
 def _hash_password(password: str, salt_hex: str | None = None):
     if salt_hex is None:
@@ -124,7 +167,7 @@ def _hash_password(password: str, salt_hex: str | None = None):
 
 def create_user(username: str, password: str):
     password_hash, password_salt = _hash_password(password)
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO users (username, password_hash, password_salt)
@@ -132,11 +175,11 @@ def create_user(username: str, password: str):
                 RETURNING id
             """, (username, password_hash, password_salt))
             user_id = cur.fetchone()[0]
-        conn.commit()
+
     return user_id
 
 def verify_user(username: str, password: str):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, password_hash, password_salt
@@ -153,7 +196,7 @@ def verify_user(username: str, password: str):
     return None
 
 def create_session(user_id: int, username: str, title: str):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO chat_session_counters (user_id, last_session_number)
@@ -170,21 +213,21 @@ def create_session(user_id: int, username: str, title: str):
                 RETURNING session_key
             """, (user_id, session_key, title))
             created_key = cur.fetchone()[0]
-        conn.commit()
+
     return created_key
 
 def update_session_title(session_id: str, title: str):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE chat_sessions
                 SET title = %s
                 WHERE session_key = %s
             """, (title, session_id))
-        conn.commit()
+
 
 def get_session_title(session_id: str):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT title
@@ -195,7 +238,7 @@ def get_session_title(session_id: str):
     return row[0] if row else None
 
 def list_sessions(user_id: int):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT COALESCE(session_key, id::text), title, created_at
@@ -210,7 +253,7 @@ def list_sessions(user_id: int):
     ]
 
 def delete_session(user_id: int, session_id: str):
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM chat_history
@@ -220,11 +263,11 @@ def delete_session(user_id: int, session_id: str):
                 DELETE FROM chat_sessions
                 WHERE session_key = %s AND user_id = %s
             """, (session_id, user_id))
-        conn.commit()
+
 
 def load_messages_from_history(session_id: str):
     messages = []
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT user_query, ai_response, source_nodes, created_at
@@ -250,7 +293,7 @@ def load_messages_from_history(session_id: str):
 
 def save_chat_turn_to_db(session_id: str, user_query: str, ai_response: str, source_nodes: list | None):
     """Lưu trọn bộ Hỏi - Đáp - Nguồn vào cùng 1 dòng"""
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO chat_history (session_id, user_query, ai_response, source_nodes) 
@@ -261,12 +304,12 @@ def save_chat_turn_to_db(session_id: str, user_query: str, ai_response: str, sou
                 ai_response, 
                 json.dumps(source_nodes, ensure_ascii=False) if source_nodes else None
             ))
-        conn.commit()
+
 
 def load_history_from_db(session_id: str, limit: int = 5):
     """Tải lại lịch sử. limit=5 nghĩa là tải 5 cặp Hỏi-Đáp (Tương đương 10 tin nhắn)"""
     history = []
-    with psycopg2.connect(PG_URI) as conn:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT user_query, ai_response FROM (

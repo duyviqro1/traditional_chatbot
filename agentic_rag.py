@@ -29,32 +29,71 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 # ==========================================
 # 1. LOAD API KEY & CONFIG
 # ==========================================
+def get_streamlit_secret(name, default=None):
+    try:
+        import streamlit as st
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
 env_path = Path(__file__).resolve().parent / '.env'
 sys.path.insert(0, str(env_path))
-from key import OPENAI_API_KEY
 try:
-    from key import TAVILY_API_KEY
+    from key import OPENAI_API_KEY as KEY_FILE_OPENAI_API_KEY
 except ImportError:
-    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+    KEY_FILE_OPENAI_API_KEY = None
+try:
+    from key import TAVILY_API_KEY as KEY_FILE_TAVILY_API_KEY
+except ImportError:
+    KEY_FILE_TAVILY_API_KEY = None
 try:
     from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
 except ImportError:
     KEY_FILE_QDRANT_CLOUD_API_KEY = None
+
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY")
+    or get_streamlit_secret("OPENAI_API_KEY")
+    or KEY_FILE_OPENAI_API_KEY
+)
+if not OPENAI_API_KEY:
+    raise RuntimeError("Missing OPENAI_API_KEY in environment, Streamlit secrets, or .env/key.py.")
+TAVILY_API_KEY = (
+    os.getenv("TAVILY_API_KEY")
+    or get_streamlit_secret("TAVILY_API_KEY")
+    or KEY_FILE_TAVILY_API_KEY
+)
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-QDRANT_URL = os.getenv(
-    "QDRANT_CLOUD_URL",
-    "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io",
+QDRANT_URL = (
+    os.getenv("QDRANT_CLOUD_URL")
+    or get_streamlit_secret("QDRANT_CLOUD_URL")
+    or os.getenv("QDRANT_URL")
+    or get_streamlit_secret("QDRANT_URL")
+    or "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io"
 )
-QDRANT_COLLECTION = os.getenv("QDRANT_CLOUD_COLLECTION", "medical_docs")
+QDRANT_COLLECTION = (
+    os.getenv("QDRANT_CLOUD_COLLECTION")
+    or get_streamlit_secret("QDRANT_CLOUD_COLLECTION")
+    or os.getenv("QDRANT_COLLECTION")
+    or get_streamlit_secret("QDRANT_COLLECTION")
+    or "medical_docs"
+)
 QDRANT_API_KEY = (
     os.getenv("QDRANT_CLOUD_API_KEY")
+    or get_streamlit_secret("QDRANT_CLOUD_API_KEY")
     or os.getenv("QDRANT_API_KEY")
+    or get_streamlit_secret("QDRANT_API_KEY")
     or KEY_FILE_QDRANT_CLOUD_API_KEY
 )
-QDRANT_TIMEOUT = int(os.getenv("QDRANT_CLOUD_TIMEOUT", "120"))
+QDRANT_TIMEOUT = int(
+    os.getenv("QDRANT_CLOUD_TIMEOUT")
+    or get_streamlit_secret("QDRANT_CLOUD_TIMEOUT")
+    or "120"
+)
 SEARCH_K = 10
 WEB_SEARCH_K = 3
 ALLOWED_WEB_DOMAINS = [

@@ -25,6 +25,12 @@ st.set_page_config(page_title="Trợ lý Lakehouse", page_icon="💬", layout="w
 NEW_CHAT_TITLE = "Cuộc trò chuyện mới"
 
 
+@st.cache_resource
+def ensure_database_initialized():
+    init_db()
+    return True
+
+
 def ensure_state():
     defaults = {
         "logged_in": False,
@@ -347,7 +353,7 @@ def main_screen():
         st.rerun()
 
 def main():
-    init_db()
+    ensure_database_initialized()
     ensure_state()
     apply_styles()
 
