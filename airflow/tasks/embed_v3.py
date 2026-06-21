@@ -22,6 +22,10 @@ from pydantic import BaseModel, Field # <-- THÊM IMPORT PYDANTIC
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
 sys.path.insert(0, str(env_path))
 from key import OPENAI_API_KEY
+try:
+    from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
+except ImportError:
+    KEY_FILE_QDRANT_CLOUD_API_KEY = None
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 
@@ -34,9 +38,18 @@ MINIO_PREFIX = 'uploads_type1/'
 
 PG_CONNECTION = "postgresql://admin:admin@127.0.0.1:5433/rag_lakehouse"
 
-QDRANT_URL = "http://localhost:6333"
-QDRANT_COLLECTION = "medical_docs"
-QDRANT_API_KEY = "qdrant_api_key"
+QDRANT_URL = os.getenv(
+    "QDRANT_CLOUD_URL",
+    "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io",
+)
+QDRANT_COLLECTION = os.getenv("QDRANT_CLOUD_COLLECTION", "medical_docs")
+QDRANT_API_KEY = (
+    os.getenv("QDRANT_CLOUD_API_KEY")
+    or os.getenv("QDRANT_API_KEY")
+    or KEY_FILE_QDRANT_CLOUD_API_KEY
+)
+QDRANT_TIMEOUT = int(os.getenv("QDRANT_CLOUD_TIMEOUT", "120"))
+QDRANT_BATCH_SIZE = int(os.getenv("QDRANT_CLOUD_BATCH_SIZE", "16"))
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
@@ -136,8 +149,11 @@ def process_chunking_and_metadata(docs, s3_path, llm, embeddings):
 
 
 def setup_qdrant_hybrid(final_chunks, embeddings):
+    if not QDRANT_API_KEY:
+        raise RuntimeError("Missing QDRANT_CLOUD_API_KEY in environment or .env/key.py.")
+
     # Khởi tạo mô hình Sparse cho Keyword Search (BM25)
-    sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+    sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25", cache_dir=".fastembed_cache")
 
     # Nạp vào Qdrant với chế độ HYBRID
     QdrantVectorStore.from_documents(
@@ -148,7 +164,8 @@ def setup_qdrant_hybrid(final_chunks, embeddings):
         url=QDRANT_URL,
         collection_name=QDRANT_COLLECTION,
         api_key=QDRANT_API_KEY,
-        batch_size=1000
+        timeout=QDRANT_TIMEOUT,
+        batch_size=QDRANT_BATCH_SIZE
     )
 
 
