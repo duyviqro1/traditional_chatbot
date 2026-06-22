@@ -43,6 +43,10 @@ try:
     from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
 except ImportError:
     KEY_FILE_QDRANT_CLOUD_API_KEY = None
+try:
+    from key import DEPLOY_MODE as KEY_FILE_DEPLOY_MODE
+except ImportError:
+    KEY_FILE_DEPLOY_MODE = None
 
 OPENAI_API_KEY = (
     os.getenv("OPENAI_API_KEY")
@@ -54,29 +58,58 @@ if not OPENAI_API_KEY:
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 # CONFIG
-QDRANT_URL = (
-    os.getenv("QDRANT_CLOUD_URL")
-    or get_streamlit_secret("QDRANT_CLOUD_URL")
-    or os.getenv("QDRANT_URL")
-    or get_streamlit_secret("QDRANT_URL")
-    or "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io"
-)
+DEPLOY_MODE = (
+    os.getenv("DEPLOY_MODE")
+    or get_streamlit_secret("DEPLOY_MODE")
+    or KEY_FILE_DEPLOY_MODE
+    or "cloud"
+).strip().lower()
 QDRANT_COLLECTION = (
-    os.getenv("QDRANT_CLOUD_COLLECTION")
-    or get_streamlit_secret("QDRANT_CLOUD_COLLECTION")
+    (
+        os.getenv("QDRANT_LOCAL_COLLECTION")
+        or get_streamlit_secret("QDRANT_LOCAL_COLLECTION")
+        if DEPLOY_MODE == "local"
+        else os.getenv("QDRANT_CLOUD_COLLECTION")
+        or get_streamlit_secret("QDRANT_CLOUD_COLLECTION")
+    )
     or os.getenv("QDRANT_COLLECTION")
     or get_streamlit_secret("QDRANT_COLLECTION")
     or "medical_docs"
 )
-QDRANT_API_KEY = (
-    os.getenv("QDRANT_CLOUD_API_KEY")
-    or get_streamlit_secret("QDRANT_CLOUD_API_KEY")
-    or os.getenv("QDRANT_API_KEY")
-    or get_streamlit_secret("QDRANT_API_KEY")
-    or KEY_FILE_QDRANT_CLOUD_API_KEY
-)
+if DEPLOY_MODE == "local":
+    QDRANT_URL = (
+        os.getenv("QDRANT_LOCAL_URL")
+        or get_streamlit_secret("QDRANT_LOCAL_URL")
+        or os.getenv("QDRANT_URL")
+        or get_streamlit_secret("QDRANT_URL")
+        or "http://localhost:6333"
+    )
+    QDRANT_API_KEY = (
+        os.getenv("QDRANT_LOCAL_API_KEY")
+        or get_streamlit_secret("QDRANT_LOCAL_API_KEY")
+        or os.getenv("QDRANT_API_KEY")
+        or get_streamlit_secret("QDRANT_API_KEY")
+        or "qdrant_api_key"
+    )
+else:
+    QDRANT_URL = (
+        os.getenv("QDRANT_CLOUD_URL")
+        or get_streamlit_secret("QDRANT_CLOUD_URL")
+        or os.getenv("QDRANT_URL")
+        or get_streamlit_secret("QDRANT_URL")
+        or "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io"
+    )
+    QDRANT_API_KEY = (
+        os.getenv("QDRANT_CLOUD_API_KEY")
+        or get_streamlit_secret("QDRANT_CLOUD_API_KEY")
+        or os.getenv("QDRANT_API_KEY")
+        or get_streamlit_secret("QDRANT_API_KEY")
+        or KEY_FILE_QDRANT_CLOUD_API_KEY
+    )
 QDRANT_TIMEOUT = int(
-    os.getenv("QDRANT_CLOUD_TIMEOUT")
+    os.getenv("QDRANT_TIMEOUT")
+    or get_streamlit_secret("QDRANT_TIMEOUT")
+    or os.getenv("QDRANT_CLOUD_TIMEOUT")
     or get_streamlit_secret("QDRANT_CLOUD_TIMEOUT")
     or "120"
 )
@@ -86,7 +119,7 @@ SEARCH_K = 10
 
 # Khởi tạo các biến toàn cục
 if not QDRANT_API_KEY:
-    raise RuntimeError("Missing QDRANT_CLOUD_API_KEY in environment or .env/key.py.")
+    raise RuntimeError("Missing QDRANT API key for the selected DEPLOY_MODE.")
 embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
 qdrant = QdrantVectorStore(client=client, collection_name=QDRANT_COLLECTION, embedding=embeddings)

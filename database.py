@@ -23,12 +23,33 @@ try:
     from key import DATABASE_URL as KEY_FILE_DATABASE_URL
 except ImportError:
     KEY_FILE_DATABASE_URL = None
+try:
+    from key import DEPLOY_MODE as KEY_FILE_DEPLOY_MODE
+except ImportError:
+    KEY_FILE_DEPLOY_MODE = None
 
-PG_URI = (
-    os.getenv("DATABASE_URL")
-    or get_streamlit_secret("DATABASE_URL")
-    or KEY_FILE_DATABASE_URL
+DEPLOY_MODE = (
+    os.getenv("DEPLOY_MODE")
+    or get_streamlit_secret("DEPLOY_MODE")
+    or KEY_FILE_DEPLOY_MODE
+    or "cloud"
+).strip().lower()
+LOCAL_DATABASE_URL = (
+    os.getenv("LOCAL_DATABASE_URL")
+    or get_streamlit_secret("LOCAL_DATABASE_URL")
+    or os.getenv("POSTGRES_LOCAL_URL")
+    or get_streamlit_secret("POSTGRES_LOCAL_URL")
     or "postgresql://admin:admin@127.0.0.1:5433/rag_lakehouse"
+)
+PG_URI = (
+    LOCAL_DATABASE_URL
+    if DEPLOY_MODE == "local"
+    else (
+        os.getenv("DATABASE_URL")
+        or get_streamlit_secret("DATABASE_URL")
+        or KEY_FILE_DATABASE_URL
+        or LOCAL_DATABASE_URL
+    )
 )
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "5"))
