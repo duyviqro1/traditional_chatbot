@@ -33,6 +33,18 @@ def get_streamlit_secret(name, default=None):
         return default
 
 
+def is_running_in_container():
+    return os.path.exists("/.dockerenv")
+
+
+def normalize_qdrant_url(url):
+    if not url:
+        return url
+    if not is_running_in_container() and url.rstrip("/") == "http://qdrant:6333":
+        return "http://localhost:6333"
+    return url
+
+
 env_path = Path(__file__).resolve().parent / '.env'
 sys.path.insert(0, str(env_path))
 try:
@@ -62,7 +74,7 @@ if not OPENAI_API_KEY:
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 # CONFIG
-QDRANT_URL = (
+QDRANT_URL = normalize_qdrant_url(
     os.getenv("QDRANT_LOCAL_URL")
     or get_streamlit_secret("QDRANT_LOCAL_URL")
     or os.getenv("QDRANT_URL")
@@ -130,13 +142,14 @@ qa_prompt = ChatPromptTemplate.from_messages([
 Nhiệm vụ của bạn là trả lời câu hỏi dựa TRÊN DUY NHẤT tài liệu được cung cấp dưới đây.
 
 CÁC QUY TẮC NGHIÊM NGẶT ĐỂ TRÁNH ẢO TƯỞNG VÀ ĐẢM BẢO CHẤT LƯỢNG:
-1. ĐIỀU KIỆN TIÊN QUYẾT: Chỉ trả lời nếu nội dung câu hỏi hoặc triệu chứng của người dùng ĐÃ ĐƯỢC NHẮC ĐẾN hoặc CÓ DỮ LIỆU liên quan trực tiếp trong phần 'Tài liệu'.
-2. NẾU KHÔNG CÓ THÔNG TIN: Nếu phần 'Tài liệu' trống rỗng, hoặc hoàn toàn không chứa thông tin giúp trả lời câu hỏi, bạn BẮT BUỘC phải trả về câu sau và KHÔNG ĐƯỢC NÓI GÌ THÊM: "Xin lỗi, tôi chưa có thông tin về vấn đề này trong cơ sở dữ liệu hiện tại."
-3. TUYỆT ĐỐI KHÔNG tự bịa đặt, không suy diễn từ kiến thức y học cá nhân ngoài tài liệu.
-4. RÀNG BUỘC THEO CÂY THUỐC ĐƯỢC HỎI: Nếu câu hỏi nhắc tên một cây thuốc hoặc vị thuốc cụ thể, CHỈ được liệt kê các công dụng/bài thuốc/cách dùng có chứa chính cây thuốc/vị thuốc đó hoặc tên đồng nghĩa của nó trong tài liệu. KHÔNG được liệt kê bài thuốc chỉ cùng bệnh/triệu chứng nhưng không chứa cây thuốc được hỏi.
-5. MỨC ĐỘ CHI TIẾT (QUAN TRỌNG): Khi tài liệu có chứa các cách dùng, bài thuốc, liều lượng (gram), hay các loại cây phối hợp phù hợp trực tiếp với cây thuốc được hỏi, bạn PHẢI liệt kê ĐẦY ĐỦ TẤT CẢ các cách đó. TUYỆT ĐỐI KHÔNG ĐƯỢC tóm tắt qua loa hay bỏ sót bất kỳ một bài thuốc / liều lượng nào.
-6. Định dạng trả lời: NÊN SỬ DỤNG gạch đầu dòng (-) hoặc đánh số (1, 2, 3...) để phân tách các bài thuốc, các cách dùng khác nhau giúp người đọc dễ hiểu. Trình bày rõ ràng, rành mạch.
-7. Trích dẫn nguồn: Cuối câu trả lời (nếu tìm thấy), ghi rõ "Nguồn tham khảo: Tên các tài liệu".
+1. ĐIỀU KIỆN TIÊN QUYẾT: Chỉ trả lời nếu nội dung câu hỏi hoặc triệu chứng của người dùng ĐÃ ĐƯỢC NHẮC ĐẾN, hoặc có biến thể/hạng mục hẹp hơn liên quan trực tiếp trong phần 'Tài liệu'.
+2. QUY TẮC BIẾN THỂ TÊN BỆNH / TRIỆU CHỨNG: Nếu câu hỏi chứa một cụm bệnh/triệu chứng lõi, thì các cụm trong tài liệu có chứa cụm lõi đó vẫn được xem là liên quan. Ví dụ: người dùng hỏi "mụn" hoặc "nổi mụn", tài liệu có "mụn nhọt", "mụn mủ", "mụn cóc" thì được phép trả lời dựa trên các đoạn đó; người dùng hỏi "mề đay" hoặc "nổi mề đay", tài liệu có "mày đay" hoặc "mề đay" thì xem là cùng vấn đề. Chỉ dùng các biến thể xuất hiện trong Tài liệu, không tự mở rộng sang bệnh khác.
+3. NẾU KHÔNG CÓ THÔNG TIN: Nếu phần 'Tài liệu' trống rỗng, hoặc hoàn toàn không chứa thông tin giúp trả lời câu hỏi, bạn BẮT BUỘC phải trả về câu sau và KHÔNG ĐƯỢC NÓI GÌ THÊM: "Xin lỗi, tôi chưa có thông tin về vấn đề này trong cơ sở dữ liệu hiện tại."
+4. TUYỆT ĐỐI KHÔNG tự bịa đặt, không suy diễn từ kiến thức y học cá nhân ngoài tài liệu.
+5. RÀNG BUỘC THEO CÂY THUỐC ĐƯỢC HỎI: Nếu câu hỏi nhắc tên một cây thuốc hoặc vị thuốc cụ thể, CHỈ được liệt kê các công dụng/bài thuốc/cách dùng có chứa chính cây thuốc/vị thuốc đó hoặc tên đồng nghĩa của nó trong tài liệu. KHÔNG được liệt kê bài thuốc chỉ cùng bệnh/triệu chứng nhưng không chứa cây thuốc được hỏi.
+6. MỨC ĐỘ CHI TIẾT (QUAN TRỌNG): Khi tài liệu có chứa các cách dùng, bài thuốc, liều lượng (gram), hay các loại cây phối hợp phù hợp trực tiếp với cây thuốc được hỏi, bạn PHẢI liệt kê ĐẦY ĐỦ TẤT CẢ các cách đó. TUYỆT ĐỐI KHÔNG ĐƯỢC tóm tắt qua loa hay bỏ sót bất kỳ một bài thuốc / liều lượng nào.
+7. Định dạng trả lời: NÊN SỬ DỤNG gạch đầu dòng (-) hoặc đánh số (1, 2, 3...) để phân tách các bài thuốc, các cách dùng khác nhau giúp người đọc dễ hiểu. Trình bày rõ ràng, rành mạch.
+8. Trích dẫn nguồn: Cuối câu trả lời (nếu tìm thấy), ghi rõ "Nguồn tham khảo: Tên các tài liệu".
 
 Tài liệu:
 {context}"""),
@@ -163,6 +176,69 @@ class MedicalEntities(BaseModel):
     diseases: List[str] = Field(description="Mảng chứa từ vựng chỉ bệnh lý/triệu chứng. BẮT BUỘC CHỈ SAO CHÉP từ có thật trong chuỗi đầu vào. Nếu câu hỏi không nhắc ĐÍCH DANH tên bệnh nào, BẮT BUỘC trả về mảng rỗng [].")
     herbs: List[str] = Field(description="Mảng chứa tên cốt lõi của thảo dược. BẮT BUỘC CHỈ SAO CHÉP từ có thật trong chuỗi đầu vào. Lược bỏ chữ 'cây', 'lá', 'quả'. Nếu có ngoặc đơn thì tách riêng. Trả về [] nếu không có.")
 
+
+DISEASE_ENTITY_PREFIXES = (
+    "toi bi ",
+    "toi mac ",
+    "em bi ",
+    "em mac ",
+    "minh bi ",
+    "minh mac ",
+    "chau bi ",
+    "chau mac ",
+    "be bi ",
+    "be mac ",
+    "nguoi benh bi ",
+    "nguoi benh mac ",
+    "dang bi ",
+    "dang mac ",
+    "bi ",
+    "mac ",
+    "co ",
+    "noi ",
+    "benh ",
+    "chung ",
+    "trieu chung ",
+    "tôi bị ",
+    "tôi mắc ",
+    "em bị ",
+    "em mắc ",
+    "mình bị ",
+    "mình mắc ",
+    "cháu bị ",
+    "cháu mắc ",
+    "bé bị ",
+    "bé mắc ",
+    "người bệnh bị ",
+    "người bệnh mắc ",
+    "đang bị ",
+    "đang mắc ",
+    "bị ",
+    "mắc ",
+    "có ",
+    "nổi ",
+    "bệnh ",
+    "chứng ",
+    "triệu chứng ",
+)
+
+
+def clean_disease_entity(value):
+    term = " ".join(str(value).strip().lower().split())
+    term = term.strip(string.punctuation + " ")
+
+    changed = True
+    while changed:
+        changed = False
+        for prefix in DISEASE_ENTITY_PREFIXES:
+            if term.startswith(prefix):
+                term = term[len(prefix):].strip()
+                changed = True
+                break
+
+    return term.strip(string.punctuation + " ")
+
+
 def extract_entities_from_query(user_query, llm):
     """
     Trích xuất thực thể bằng persona Text Parser (Triệt tiêu hoàn toàn tính suy diễn Y học)
@@ -177,6 +253,15 @@ def extract_entities_from_query(user_query, llm):
     1. KHÔNG ĐƯỢC TỰ SUY LUẬN. Tuyệt đối không tự điền thêm bất kỳ tên bệnh, tên cây thuốc, hoặc từ khóa nào không xuất hiện bằng chữ trong chuỗi đầu vào.
     2. Nếu người dùng hỏi chung chung như "tác dụng của cây A", "cây B chữa bệnh gì" (không nhắc đến một cái bệnh cụ thể nào), mảng diseases PHẢI LÀ MẢNG RỖNG [].
     
+    QUY TẮC LÀM SẠCH TÊN BỆNH / TRIỆU CHỨNG (diseases):
+    - Chỉ trả về CỤM BỆNH hoặc TRIỆU CHỨNG LÕI.
+    - Được phép lược bỏ các từ chỉ trạng thái/ngữ cảnh như: "tôi bị", "bị", "mắc", "có", "đang bị", "nổi", "bệnh", "chứng", "triệu chứng".
+    - Không được thêm bệnh mới không có trong câu; chỉ bỏ từ thừa ở đầu cụm.
+    - Input: "tôi bị nổi mề đay" -> diseases: ["mề đay"], herbs: []
+    - Input: "bị nổi mẩn đỏ ở tay" -> diseases: ["mẩn đỏ"], herbs: []
+    - Input: "nổi mụn ở mặt" -> diseases: ["mụn"], herbs: []
+    - Input: "mắc viêm xoang" -> diseases: ["viêm xoang"], herbs: []
+
     QUY TẮC LÀM SẠCH TÊN CÂY (herbs):
     - Bỏ các từ: "cây", "lá", "củ", "quả", "rễ", "hoa", "vị thuốc". Ví dụ: "lá khôi" -> "khôi".
     - Nếu có chữ trong ngoặc, tách thành phần tử riêng. Ví dụ: "cỏ xước (ngưu tất)" -> ["cỏ xước", "ngưu tất"].
@@ -195,8 +280,12 @@ def extract_entities_from_query(user_query, llm):
         structured_llm = llm.with_structured_output(MedicalEntities)
         response = structured_llm.invoke(prompt)
         
-        # CHỐT CHẶN BẰNG PYTHON: Ép toàn bộ phần tử trong mảng về chữ viết thường
-        safe_diseases = [d.strip().lower() for d in response.diseases] if response.diseases else []
+        # CHỐT CHẶN BẰNG PYTHON: Ép về cụm bệnh/triệu chứng lõi.
+        safe_diseases = []
+        for disease in response.diseases or []:
+            cleaned_disease = clean_disease_entity(disease)
+            if cleaned_disease and cleaned_disease not in safe_diseases:
+                safe_diseases.append(cleaned_disease)
         safe_herbs = [h.strip().lower() for h in response.herbs] if response.herbs else []
         
         return safe_diseases, safe_herbs

@@ -37,6 +37,18 @@ def get_streamlit_secret(name, default=None):
         return default
 
 
+def is_running_in_container():
+    return os.path.exists("/.dockerenv")
+
+
+def normalize_qdrant_url(url):
+    if not url:
+        return url
+    if not is_running_in_container() and url.rstrip("/") == "http://qdrant:6333":
+        return "http://localhost:6333"
+    return url
+
+
 env_path = Path(__file__).resolve().parent / '.env'
 sys.path.insert(0, str(env_path))
 try:
@@ -76,7 +88,7 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-QDRANT_URL = (
+QDRANT_URL = normalize_qdrant_url(
     os.getenv("QDRANT_LOCAL_URL")
     or get_streamlit_secret("QDRANT_LOCAL_URL")
     or os.getenv("QDRANT_URL")
