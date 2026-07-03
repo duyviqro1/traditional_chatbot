@@ -135,7 +135,6 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages([
 standalone_question_chain = contextualize_q_prompt | llm | StrOutputParser()
 
 # Prompt trả lời y khoa nghiêm ngặt chống ảo tưởng
-# Prompt trả lời y khoa nghiêm ngặt chống ảo tưởng & Ép chi tiết
 qa_prompt = ChatPromptTemplate.from_messages([
     ("system", """Bạn là một trợ lý ảo chuyên sâu về Y học cổ truyền, chẩn đoán bệnh và tư vấn dược liệu.
 
