@@ -37,6 +37,18 @@ def get_streamlit_secret(name, default=None):
         return default
 
 
+def is_running_in_container():
+    return os.path.exists("/.dockerenv")
+
+
+def normalize_qdrant_url(url):
+    if not url:
+        return url
+    if not is_running_in_container() and url.rstrip("/") == "http://qdrant:6333":
+        return "http://localhost:6333"
+    return url
+
+
 env_path = Path(__file__).resolve().parent / '.env'
 sys.path.insert(0, str(env_path))
 try:
@@ -48,9 +60,17 @@ try:
 except ImportError:
     KEY_FILE_TAVILY_API_KEY = None
 try:
-    from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
+    from key import QDRANT_LOCAL_URL as KEY_FILE_QDRANT_LOCAL_URL
 except ImportError:
-    KEY_FILE_QDRANT_CLOUD_API_KEY = None
+    KEY_FILE_QDRANT_LOCAL_URL = None
+try:
+    from key import QDRANT_LOCAL_API_KEY as KEY_FILE_QDRANT_LOCAL_API_KEY
+except ImportError:
+    KEY_FILE_QDRANT_LOCAL_API_KEY = None
+try:
+    from key import QDRANT_LOCAL_COLLECTION as KEY_FILE_QDRANT_LOCAL_COLLECTION
+except ImportError:
+    KEY_FILE_QDRANT_LOCAL_COLLECTION = None
 
 OPENAI_API_KEY = (
     os.getenv("OPENAI_API_KEY")
@@ -68,30 +88,31 @@ os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
-QDRANT_URL = (
-    os.getenv("QDRANT_CLOUD_URL")
-    or get_streamlit_secret("QDRANT_CLOUD_URL")
+QDRANT_URL = normalize_qdrant_url(
+    os.getenv("QDRANT_LOCAL_URL")
+    or get_streamlit_secret("QDRANT_LOCAL_URL")
     or os.getenv("QDRANT_URL")
     or get_streamlit_secret("QDRANT_URL")
-    or "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io"
+    or KEY_FILE_QDRANT_LOCAL_URL
+    or "http://qdrant:6333"
 )
 QDRANT_COLLECTION = (
-    os.getenv("QDRANT_CLOUD_COLLECTION")
-    or get_streamlit_secret("QDRANT_CLOUD_COLLECTION")
+    os.getenv("QDRANT_LOCAL_COLLECTION")
+    or get_streamlit_secret("QDRANT_LOCAL_COLLECTION")
     or os.getenv("QDRANT_COLLECTION")
     or get_streamlit_secret("QDRANT_COLLECTION")
+    or KEY_FILE_QDRANT_LOCAL_COLLECTION
     or "medical_docs"
 )
 QDRANT_API_KEY = (
-    os.getenv("QDRANT_CLOUD_API_KEY")
-    or get_streamlit_secret("QDRANT_CLOUD_API_KEY")
-    or os.getenv("QDRANT_API_KEY")
-    or get_streamlit_secret("QDRANT_API_KEY")
-    or KEY_FILE_QDRANT_CLOUD_API_KEY
+    os.getenv("QDRANT_LOCAL_API_KEY")
+    or get_streamlit_secret("QDRANT_LOCAL_API_KEY")
+    or KEY_FILE_QDRANT_LOCAL_API_KEY
+    or "qdrant_api_key"
 )
 QDRANT_TIMEOUT = int(
-    os.getenv("QDRANT_CLOUD_TIMEOUT")
-    or get_streamlit_secret("QDRANT_CLOUD_TIMEOUT")
+    os.getenv("QDRANT_TIMEOUT")
+    or get_streamlit_secret("QDRANT_TIMEOUT")
     or "120"
 )
 SEARCH_K = 10
@@ -191,7 +212,7 @@ KNOWN_DISEASE_TERMS = {
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 if not QDRANT_API_KEY:
-    raise RuntimeError("Missing QDRANT_CLOUD_API_KEY in environment or .env/key.py.")
+    raise RuntimeError("Missing local Qdrant API key.")
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
 qdrant = QdrantVectorStore(client=client, collection_name=QDRANT_COLLECTION, embedding=embeddings)
 try:

@@ -1,6 +1,7 @@
 # Configuration Keys
 OPENAI_API_KEY = "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"
-QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6YWIyODMxYWYtOTc5MS00ZjhlLThmMGQtNDA4N2I1YjY4NDY4In0.VRYVIimFXav-ritZXyaYHiv5tLLB7JF6VycfpSjIwSs"
 TAVILY_API_KEY = "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"
-QDRANT_CLOUD_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6OTRhNzkwYzItMTA3OS00ZjA3LWE3NmMtMmRjNGJkZGU4ZDk2In0.fpLzOvXu2I2gGoa8iv5hBvJDCsqNOd0gvgyTvLcWTC0"
-DATABASE_URL = "postgresql://neondb_owner:npg_spwT1ojXFt5L@ep-lucky-art-aoxpnhji-pooler.c-2.ap-southeast-1.aws.neon.tech/rag_chatbot?sslmode=require&channel_binding=require"
+QDRANT_LOCAL_URL = "http://qdrant:6333"
+QDRANT_LOCAL_API_KEY = "qdrant_api_key"
+QDRANT_LOCAL_COLLECTION = "medical_docs"
+LOCAL_DATABASE_URL = "postgresql://admin:admin@postgres_shared:5432/rag_lakehouse"

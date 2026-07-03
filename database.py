@@ -16,19 +16,31 @@ def get_streamlit_secret(name, default=None):
         return default
 
 
+def is_running_in_container():
+    return os.path.exists("/.dockerenv")
+
+
+def normalize_postgres_uri(uri):
+    if not uri or is_running_in_container():
+        return uri
+    return uri.replace("@postgres_shared:5432/", "@localhost:5433/")
+
+
 env_path = Path(__file__).resolve().parent / ".env"
 sys.path.insert(0, str(env_path))
 
 try:
-    from key import DATABASE_URL as KEY_FILE_DATABASE_URL
+    from key import LOCAL_DATABASE_URL as KEY_FILE_LOCAL_DATABASE_URL
 except ImportError:
-    KEY_FILE_DATABASE_URL = None
+    KEY_FILE_LOCAL_DATABASE_URL = None
 
-PG_URI = (
-    os.getenv("DATABASE_URL")
-    or get_streamlit_secret("DATABASE_URL")
-    or KEY_FILE_DATABASE_URL
-    or "postgresql://admin:admin@127.0.0.1:5433/rag_lakehouse"
+PG_URI = normalize_postgres_uri(
+    os.getenv("LOCAL_DATABASE_URL")
+    or get_streamlit_secret("LOCAL_DATABASE_URL")
+    or os.getenv("POSTGRES_LOCAL_URL")
+    or get_streamlit_secret("POSTGRES_LOCAL_URL")
+    or KEY_FILE_LOCAL_DATABASE_URL
+    or "postgresql://admin:admin@postgres_shared:5432/rag_lakehouse"
 )
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "5"))

@@ -24,33 +24,59 @@ env_path = Path(__file__).resolve().parent.parent.parent / '.env'
 sys.path.insert(0, str(env_path))
 from key import OPENAI_API_KEY
 try:
-    from key import QDRANT_CLOUD_API_KEY as KEY_FILE_QDRANT_CLOUD_API_KEY
+    from key import QDRANT_LOCAL_URL as KEY_FILE_QDRANT_LOCAL_URL
 except ImportError:
-    KEY_FILE_QDRANT_CLOUD_API_KEY = None
+    KEY_FILE_QDRANT_LOCAL_URL = None
+try:
+    from key import QDRANT_LOCAL_API_KEY as KEY_FILE_QDRANT_LOCAL_API_KEY
+except ImportError:
+    KEY_FILE_QDRANT_LOCAL_API_KEY = None
+try:
+    from key import QDRANT_LOCAL_COLLECTION as KEY_FILE_QDRANT_LOCAL_COLLECTION
+except ImportError:
+    KEY_FILE_QDRANT_LOCAL_COLLECTION = None
+try:
+    from key import LOCAL_DATABASE_URL as KEY_FILE_LOCAL_DATABASE_URL
+except ImportError:
+    KEY_FILE_LOCAL_DATABASE_URL = None
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
 
 # --- CONFIG ----
-MINIO_ENDPOINT = 'http://localhost:9000'
+MINIO_ENDPOINT = os.getenv(
+    "MINIO_ENDPOINT",
+    "http://minio:9000",
+)
 MINIO_ACCESS_KEY = 'admin'
 MINIO_SECRET_KEY = 'password'
 MINIO_BUCKET = 'yhct-client'
 MINIO_PREFIX = 'uploads_type1/'
 
-PG_CONNECTION = "postgresql://admin:admin@127.0.0.1:5433/rag_lakehouse"
-
-QDRANT_URL = os.getenv(
-    "QDRANT_CLOUD_URL",
-    "https://1a2c93a3-63cc-4363-bcf0-ccf4f0640ed1.us-east-1-1.aws.cloud.qdrant.io",
+PG_CONNECTION = (
+    os.getenv("LOCAL_DATABASE_URL")
+    or os.getenv("POSTGRES_LOCAL_URL")
+    or KEY_FILE_LOCAL_DATABASE_URL
+    or "postgresql://admin:admin@postgres_shared:5432/rag_lakehouse"
 )
-QDRANT_COLLECTION = os.getenv("QDRANT_CLOUD_COLLECTION", "medical_docs")
+QDRANT_URL = (
+    os.getenv("QDRANT_LOCAL_URL")
+    or os.getenv("QDRANT_URL")
+    or KEY_FILE_QDRANT_LOCAL_URL
+    or "http://qdrant:6333"
+)
+QDRANT_COLLECTION = (
+    os.getenv("QDRANT_LOCAL_COLLECTION")
+    or os.getenv("QDRANT_COLLECTION")
+    or KEY_FILE_QDRANT_LOCAL_COLLECTION
+    or "medical_docs"
+)
 QDRANT_API_KEY = (
-    os.getenv("QDRANT_CLOUD_API_KEY")
-    or os.getenv("QDRANT_API_KEY")
-    or KEY_FILE_QDRANT_CLOUD_API_KEY
+    os.getenv("QDRANT_LOCAL_API_KEY")
+    or KEY_FILE_QDRANT_LOCAL_API_KEY
+    or "qdrant_api_key"
 )
-QDRANT_TIMEOUT = int(os.getenv("QDRANT_CLOUD_TIMEOUT", "120"))
-QDRANT_BATCH_SIZE = int(os.getenv("QDRANT_CLOUD_BATCH_SIZE", "16"))
+QDRANT_TIMEOUT = int(os.getenv("QDRANT_TIMEOUT", "120"))
+QDRANT_BATCH_SIZE = int(os.getenv("QDRANT_BATCH_SIZE", "16"))
 
 # Cấu hình kích thước Chunk cứng cho dữ liệu danh mục sách
 CHUNK_SIZE = 1200   
@@ -150,7 +176,7 @@ def process_chunking_and_metadata(docs, s3_path, llm, embeddings):
 
 def setup_qdrant_hybrid(final_chunks, embeddings):
     if not QDRANT_API_KEY:
-        raise RuntimeError("Missing QDRANT_CLOUD_API_KEY in environment or .env/key.py.")
+        raise RuntimeError("Missing local Qdrant API key.")
 
     sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25", cache_dir=".fastembed_cache")
     QdrantVectorStore.from_documents(
@@ -224,6 +250,14 @@ def process_single_file(file_obj, pg_conn, embeddings, s3_client):
 
 def process_new_pdfs():
     logger.info("Bắt đầu quét MinIO và đối chiếu Postgres...")
+    logger.info(
+        "Embed config: MINIO_ENDPOINT=%s | QDRANT_URL=%s | "
+        "QDRANT_COLLECTION=%s | PG_CONNECTION=%s",
+        MINIO_ENDPOINT,
+        QDRANT_URL,
+        QDRANT_COLLECTION,
+        PG_CONNECTION,
+    )
     pg_conn = psycopg2.connect(PG_CONNECTION)
     try:
         processed_etags = get_processed_etags(pg_conn)
