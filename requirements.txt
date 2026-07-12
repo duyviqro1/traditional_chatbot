@@ -11,3 +11,4 @@ langchain-core
 langchain_classic
 langchain-tavily
 ragas
+fastembed
