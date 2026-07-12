@@ -358,6 +358,17 @@ def entity_match_score(doc, diseases, herbs):
             score += 1
 
     return score
+
+
+def sort_docs_stably(docs):
+    return sorted(
+        docs,
+        key=lambda doc: (
+            str(doc.metadata.get("source", "")),
+            str(doc.metadata.get("chunk_id", "")),
+            doc.page_content[:80]
+        )
+    )
     
 # ========================================================
 # 2. TRUY XUẤT HYBRID VÀ ƯU TIÊN ENTITY MỀM
@@ -434,15 +445,12 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
         fallback_query=fallback_query
     )
     
-    context_docs = dynamic_retriever.invoke(standalone_query)
-    context_docs = sorted(
-        context_docs,
-        key=lambda doc: (
-            str(doc.metadata.get("source", "")),
-            str(doc.metadata.get("chunk_id", "")),
-            doc.page_content[:80]
-        )
-    )
+    context_docs = sort_docs_stably(dynamic_retriever.invoke(standalone_query))
+
+    if not context_docs:
+        print("   -> [HYBRID] Metadata hints khong tra ve tai lieu. Thu lai bang vector/hybrid search khong filter metadata.")
+        fallback_retriever = qdrant_vectorstore.as_retriever(search_kwargs={"k": SEARCH_K})
+        context_docs = sort_docs_stably(fallback_retriever.invoke(standalone_query))
     print(f"   -> Đã lấy lên {len(context_docs)} đoạn tài liệu liên quan.")
 
     diseases, herbs = extract_entities_from_query(corrected_question, llm)
