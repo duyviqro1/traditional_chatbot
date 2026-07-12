@@ -8,7 +8,7 @@ from qdrant_client.http import models
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_qdrant import QdrantVectorStore
+from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
@@ -20,7 +20,6 @@ from source_mapping import SOURCE_MAPPING
 
 from typing import List
 from pydantic import BaseModel, Field
-from qdrant_client.http import models
 
 # ==========================================
 # LOAD API KEY
@@ -103,14 +102,22 @@ QDRANT_TIMEOUT = int(
 )
 LLM_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
+SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
 SEARCH_K = 10
 
 # Khởi tạo các biến toàn cục
 if not QDRANT_API_KEY:
     raise RuntimeError("Missing local Qdrant API key.")
 embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+sparse_embeddings = FastEmbedSparse(model_name=SPARSE_EMBEDDING_MODEL, cache_dir=".fastembed_cache")
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
-qdrant = QdrantVectorStore(client=client, collection_name=QDRANT_COLLECTION, embedding=embeddings)
+qdrant = QdrantVectorStore(
+    client=client,
+    collection_name=QDRANT_COLLECTION,
+    embedding=embeddings,
+    sparse_embedding=sparse_embeddings,
+    retrieval_mode=RetrievalMode.HYBRID,
+)
 llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
 
 # Chain tiền xử lý (Sửa lỗi chính tả & Thêm dấu)
@@ -330,113 +337,67 @@ def parse_herb_field(value):
     return [item.strip().lower() for item in str(value).split(",") if item.strip()]
 
 
-def build_herb_terms_from_docs(docs, herbs):
-    herb_terms = {normalize_text(herb) for herb in herbs if herb.strip()}
+def entity_match_score(doc, diseases, herbs):
+    metadata_herbs = parse_herb_field(doc.metadata.get('herbs', ''))
+    metadata_disease = normalize_text(str(doc.metadata.get('disease', '')))
+    content_norm = normalize_text(doc.page_content)
 
-    for doc in docs:
-        content_norm = normalize_text(doc.page_content)
-        if not any(herb in content_norm for herb in herb_terms):
-            continue
+    score = 0
+    for herb in herbs:
+        herb_norm = normalize_text(herb)
+        if herb_norm in metadata_herbs:
+            score += 3
+        elif herb_norm in content_norm:
+            score += 2
 
-        alias_match = re.search(
-            r"(?i)tên\s+khác\s*:\s*(.+?)(?:\n\n|\n[A-ZÀ-Ỵ ]{3,}:|$)",
-            doc.page_content,
-            flags=re.DOTALL,
-        )
-        if not alias_match:
-            continue
+    for disease in diseases:
+        disease_norm = normalize_text(disease)
+        if disease_norm and disease_norm in metadata_disease:
+            score += 2
+        elif disease_norm and disease_norm in content_norm:
+            score += 1
 
-        aliases = re.split(r"[-,;()\n]+", alias_match.group(1))
-        for alias in aliases:
-            alias_norm = normalize_text(alias)
-            if alias_norm and 1 <= len(alias_norm.split()) <= 4:
-                herb_terms.add(alias_norm)
-
-    return herb_terms
-
-
-def filter_recipe_blocks_by_herbs(docs, herbs):
-    if not herbs:
-        return docs
-
-    herb_terms = build_herb_terms_from_docs(docs, herbs)
-    filtered_docs = []
-
-    for doc in docs:
-        parts = re.split(r"(?=(?:^|\n)Bài\s+\d+\s*:)", doc.page_content)
-        selected_parts = []
-
-        for idx, part in enumerate(parts):
-            part_norm = normalize_text(part)
-            has_target_herb = any(term in part_norm for term in herb_terms)
-
-            if idx == 0:
-                if has_target_herb:
-                    selected_parts.append(part.strip())
-                continue
-
-            if has_target_herb:
-                selected_parts.append(part.strip())
-
-        if selected_parts:
-            doc.page_content = "\n\n".join(selected_parts)
-            filtered_docs.append(doc)
-
-    if len(filtered_docs) != len(docs):
-        print(f"   -> [FILTER] Lọc nội dung bài thuốc theo cây được hỏi: {len(docs)} -> {len(filtered_docs)} đoạn.")
-
-    return filtered_docs
+    return score
     
 # ========================================================
-# 2. THAY ĐỔI LOGIC BỘ LỌC SANG PHÉP TOÁN LAI (AND CỦA CÁC OR)
+# 2. TRUY XUẤT HYBRID VÀ ƯU TIÊN ENTITY MỀM
 # ========================================================
 def get_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
-    # Bước A: Trích xuất các mảng thực thể từ câu hỏi hiện tại
-    diseases, herbs = extract_entities_from_query(primary_query, llm)
+    return get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=fallback_query)
 
-    # Bước A2: Nếu câu hiện tại không có thực thể, fallback câu hỏi gần nhất
+def get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
+    diseases, herbs = extract_entities_from_query(primary_query, llm)
     if not diseases and not herbs and fallback_query:
-        print("   [FILTER] -> Không có thực thể ở câu hiện tại, thử fallback câu hỏi trước đó.")
         diseases, herbs = extract_entities_from_query(fallback_query, llm)
-    
+
     search_kwargs = {"k": SEARCH_K}
-    must_conditions = []
     should_conditions = []
-    
-    # Bước B: Xử lý nhóm Bệnh lý (Phép toán OR nội bộ nhóm: Bệnh 1 OR Bệnh 2)
-    if diseases:
-        print(f"   [FILTER] -> Kích hoạt lọc nhóm Bệnh (Toán tử OR): {diseases}")
-        disease_conditions = [
+
+    for disease in diseases:
+        should_conditions.append(
             models.FieldCondition(
                 key="metadata.disease",
-                match=models.MatchText(text=d) 
+                match=models.MatchText(text=disease)
             )
-            for d in diseases
-        ]
-        should_conditions.extend(disease_conditions)
-        
-    # Bước C: Xử lý nhóm Thảo dược (Phép toán OR nội bộ nhóm: Cây 1 OR Cây 2)
-    if herbs:
-        print(f"   [FILTER] -> Kích hoạt lọc nhóm Thảo dược (Toán tử OR): {herbs}")
-        herb_conditions = [
+        )
+
+    for herb in herbs:
+        should_conditions.append(
             models.FieldCondition(
                 key="metadata.herbs",
-                match=models.MatchText(text=h) 
+                match=models.MatchText(text=herb)
             )
-            for h in herbs
-        ]
-        must_conditions.append(models.Filter(should=herb_conditions))
-
-    # Bước D: Tổng hợp bộ lọc đẩy vào cấu hình tìm kiếm Qdrant
-    if must_conditions or should_conditions:
-        # Qdrant hiểu: bắt buộc thỏa mãn nhóm Thảo dược, ưu tiên nhóm Bệnh nếu có
-        search_kwargs["filter"] = models.Filter(
-            must=must_conditions or None,
-            should=should_conditions or None
         )
-    else:
-        print("   [FILTER] -> Câu hỏi chung, tìm kiếm tự do không áp bộ lọc Metadata.")
 
+    if should_conditions:
+        search_kwargs["filter"] = models.Filter(should=should_conditions)
+
+    if diseases or herbs:
+        print(f"   [HYBRID] -> Metadata should filter | diseases={diseases} | herbs={herbs}")
+    else:
+        print("   [HYBRID] -> General query, no entity hints.")
+
+    print("   [HYBRID] -> Dense+sparse retrieval with metadata should conditions.")
     return qdrant_vectorstore.as_retriever(search_kwargs=search_kwargs)
 
 
@@ -466,7 +427,7 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
     })
     
     fallback_query = get_last_user_message(chat_history)
-    dynamic_retriever = get_filtered_retriever(
+    dynamic_retriever = get_hybrid_retriever(
         qdrant_vectorstore,
         corrected_question,
         llm,
@@ -488,25 +449,17 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
     if not diseases and not herbs and fallback_query:
         diseases, herbs = extract_entities_from_query(fallback_query, llm)
 
-    if herbs:
-        filtered_docs = []
-        for doc in context_docs:
-            herb_candidates = parse_herb_field(doc.metadata.get('herbs', ''))
-            content_norm = normalize_text(doc.page_content)
-            if any(h in herb_candidates or h in content_norm for h in herbs):
-                filtered_docs.append(doc)
-        if len(filtered_docs) != len(context_docs):
-            print(f"   -> [FILTER] Lọc theo cây thuốc: {len(context_docs)} -> {len(filtered_docs)} đoạn.")
+    if diseases or herbs:
         context_docs = sorted(
-            filtered_docs,
+            context_docs,
             key=lambda doc: (
+                -entity_match_score(doc, diseases, herbs),
                 str(doc.metadata.get("source", "")),
                 str(doc.metadata.get("chunk_id", "")),
                 doc.page_content[:80]
             )
         )
-
-        context_docs = filter_recipe_blocks_by_herbs(context_docs, herbs)
+        print("   -> [HYBRID] Sap xep uu tien tai lieu khop entity, khong loai bo tai lieu bang keyword.")
 
     if context_docs:
         print("   -> [TÀI LIỆU] Danh sách tài liệu đã lấy:")

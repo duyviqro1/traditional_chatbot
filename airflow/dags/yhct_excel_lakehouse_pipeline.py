@@ -12,6 +12,7 @@ RAW_PREFIX = "uploads_excel"
 LAKEHOUSE_BUCKET = "yhct-lakehouse"
 BRONZE_TABLE_NAME = "bronze_layer"
 SILVER_TABLE_NAME = "silver_layer"
+GOLD_DATABASE = "yhct_gold"
 MINIO_CONTAINER = "minio"
 SPARK_CONTAINER = "delta-spark"
 SPARK_PACKAGES = "io.delta:delta-spark_2.13:4.0.0,org.apache.hadoop:hadoop-aws:3.4.1"
@@ -132,10 +133,24 @@ def bronze_to_silver():
     )
 
 
+def silver_to_gold():
+    run_in_delta_spark(
+        [
+            "bash",
+            "-lc",
+            f"{PREPARE_IVY_CACHE} && "
+            f"spark-submit $SPARK_OPTS {SPARK_PACKAGE_OPTS} /opt/jobs/silver_to_gold.py "
+            f"--lakehouse-bucket {LAKEHOUSE_BUCKET} "
+            f"--silver-table-name {SILVER_TABLE_NAME} "
+            f"--gold-database {GOLD_DATABASE}",
+        ]
+    )
+
+
 with DAG(
     dag_id="yhct_excel_lakehouse_pipeline",
     default_args=default_args,
-    description="Ingest Excel/CSV raw files from MinIO into Delta bronze and silver layers",
+    description="Ingest Excel/CSV raw files from MinIO into Delta bronze, silver, and gold layers",
     start_date=datetime(2026, 6, 18),
     catchup=False,
     tags=["yhct", "lakehouse", "delta", "minio"],
@@ -155,5 +170,10 @@ with DAG(
         python_callable=bronze_to_silver,
     )
 
-    # ensure_buckets_task >> raw_to_bronze_task >> bronze_to_silver_task
-    raw_to_bronze_task >> bronze_to_silver_task
+    silver_to_gold_task = PythonOperator(
+        task_id="silver_to_gold",
+        python_callable=silver_to_gold,
+    )
+
+    # ensure_buckets_task >> raw_to_bronze_task >> bronze_to_silver_task >> silver_to_gold_task
+    raw_to_bronze_task >> bronze_to_silver_task >> silver_to_gold_task
