@@ -10,11 +10,15 @@ from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_tavily import TavilySearch
+try:
+    from langchain_tavily import TavilySearch
+except ImportError:
+    TavilySearch = None
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
@@ -216,6 +220,8 @@ if not QDRANT_API_KEY:
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=QDRANT_TIMEOUT)
 qdrant = QdrantVectorStore(client=client, collection_name=QDRANT_COLLECTION, embedding=embeddings)
 try:
+    if TavilySearch is None:
+        raise ImportError("langchain_tavily is not installed")
     tavily_search_tool = TavilySearch(
         max_results=WEB_SEARCH_K,
         include_domains=ALLOWED_WEB_DOMAINS,
@@ -248,6 +254,19 @@ Output: "Tôi hay bị đau đầu chóng mặt thì uống cây gì?"
     ("human", "{input}")
 ])
 spell_check_chain = spell_check_prompt | llm | parser
+
+# Match chatbot.py preprocessing rules: add Vietnamese accents while preserving herb names and medical terms.
+spell_check_prompt = ChatPromptTemplate.from_messages([
+    ("system", """Bạn là một công cụ tiền xử lý ngôn ngữ tiếng Việt. 
+Nhiệm vụ của bạn:
+1. Thêm dấu tiếng Việt nếu câu bị thiếu dấu (ví dụ: "cay actiso" -> "cây actisô").
+2. TUYỆT ĐỐI GIỮ NGUYÊN CÁC DANH TỪ RIÊNG, TÊN CÂY THUỐC, THẢO DƯỢC, thuật ngữ y học dù nó được viết theo cách cũ hay phiên âm (ví dụ: actisô, atisô, sâm, quy...). KHÔNG ĐƯỢC tự ý sửa "actisô" thành "atisô" hoặc ngược lại.
+3. KHÔNG ĐƯỢC thêm dấu chấm (.), dấu phẩy, hay dấu hỏi vào cuối kết quả.
+4. KHÔNG đổi chữ hoa/chữ thường tùy tiện.
+CHỈ trả về kết quả, KHÔNG giải thích."""),
+    ("human", "{input}")
+])
+spell_check_chain = spell_check_prompt | llm | StrOutputParser()
 
 # ==========================================
 # 2. ĐỊNH NGHĨA TRẠNG THÁI (STATE) VÀ SCHEMAS
@@ -340,6 +359,38 @@ def parse_herb_field(value):
     if isinstance(value, list):
         return [item.strip().lower() for item in value if str(item).strip()]
     return [item.strip().lower() for item in str(value).split(",") if item.strip()]
+
+def entity_match_score(doc, diseases, herbs):
+    metadata_herbs = parse_herb_field(doc.metadata.get("herbs", ""))
+    metadata_disease = normalize_text(str(doc.metadata.get("disease", "")))
+    content_norm = normalize_text(doc.page_content)
+
+    score = 0
+    for herb in herbs:
+        herb_norm = normalize_text(herb)
+        if herb_norm in metadata_herbs:
+            score += 3
+        elif herb_norm in content_norm:
+            score += 2
+
+    for disease in diseases:
+        disease_norm = normalize_text(disease)
+        if disease_norm and disease_norm in metadata_disease:
+            score += 2
+        elif disease_norm and disease_norm in content_norm:
+            score += 1
+
+    return score
+
+def sort_docs_stably(docs):
+    return sorted(
+        docs,
+        key=lambda doc: (
+            str(doc.metadata.get("source", "")),
+            str(doc.metadata.get("chunk_id", "")),
+            doc.page_content[:80],
+        ),
+    )
 
 def format_answer_sources(documents):
     if not documents:
@@ -538,7 +589,7 @@ def extract_entities_from_query(user_query: str, llm):
     except Exception:
         return rule_diseases, []
 
-def get_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
+def _legacy_strict_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
     diseases, herbs = extract_entities_from_query(primary_query, llm)
 
     if not diseases and not herbs and fallback_query:
@@ -578,6 +629,44 @@ def get_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_quer
 # ==========================================
 # 3. ĐỊNH NGHĨA CÁC NODES (HÀNH ĐỘNG)
 # ==========================================
+def get_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
+    return get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=fallback_query)
+
+def get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
+    diseases, herbs = extract_entities_from_query(primary_query, llm)
+    if not diseases and not herbs and fallback_query:
+        diseases, herbs = extract_entities_from_query(fallback_query, llm)
+
+    search_kwargs = {"k": SEARCH_K}
+    should_conditions = []
+
+    for disease in diseases:
+        should_conditions.append(
+            models.FieldCondition(
+                key="metadata.disease",
+                match=models.MatchText(text=disease),
+            )
+        )
+
+    for herb in herbs:
+        should_conditions.append(
+            models.FieldCondition(
+                key="metadata.herbs",
+                match=models.MatchText(text=herb),
+            )
+        )
+
+    if should_conditions:
+        search_kwargs["filter"] = models.Filter(should=should_conditions)
+
+    if diseases or herbs:
+        print(f"   [HYBRID] -> Metadata should filter | diseases={diseases} | herbs={herbs}")
+    else:
+        print("   [HYBRID] -> General query, no entity hints.")
+
+    print("   [HYBRID] -> Dense+sparse retrieval with metadata should conditions.")
+    return qdrant_vectorstore.as_retriever(search_kwargs=search_kwargs)
+
 def spellcheck(state: GraphState):
     """Sửa lỗi chính tả và kiểm tra an toàn"""
     print("--- KIỂM TRA CHÍNH TẢ & THÊM DẤU ---")
@@ -607,6 +696,39 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages([
 ])
 query_rewrite_chain = contextualize_q_prompt | llm | StrOutputParser()
 
+qa_prompt = ChatPromptTemplate.from_messages([
+    ("system", """Bạn là một trợ lý ảo chuyên sâu về Y học cổ truyền, chẩn đoán bệnh và tư vấn dược liệu.
+
+Nhiệm vụ của bạn là trả lời câu hỏi dựa TRÊN DUY NHẤT tài liệu được cung cấp dưới đây.
+
+CÁC QUY TẮC NGHIÊM NGẶT ĐỂ TRÁNH ẢO TƯỞNG VÀ ĐẢM BẢO CHẤT LƯỢNG:
+1. ĐIỀU KIỆN TIÊN QUYẾT: Chỉ trả lời nếu nội dung câu hỏi hoặc triệu chứng của người dùng ĐÃ ĐƯỢC NHẮC ĐẾN, hoặc có biến thể/hạng mục hẹp hơn liên quan trực tiếp trong phần 'Tài liệu'.
+2. QUY TẮC BIẾN THỂ TÊN BỆNH / TRIỆU CHỨNG: Nếu câu hỏi chứa một cụm bệnh/triệu chứng lõi, thì các cụm trong tài liệu có chứa cụm lõi đó vẫn được xem là liên quan. Ví dụ: người dùng hỏi "mụn" hoặc "nổi mụn", tài liệu có "mụn nhọt", "mụn mủ", "mụn cóc" thì được phép trả lời dựa trên các đoạn đó; người dùng hỏi "mề đay" hoặc "nổi mề đay", tài liệu có "mày đay" hoặc "mề đay" thì xem là cùng vấn đề. Chỉ dùng các biến thể xuất hiện trong Tài liệu, không tự mở rộng sang bệnh khác.
+3. CÂU HỎI YES/NO VỀ "CÂY A CÓ CHỮA BỆNH/CÔNG DỤNG B KHÔNG": Nếu Tài liệu có thông tin về đúng cây thuốc/vị thuốc A nhưng KHÔNG nhắc A dùng cho bệnh/công dụng B, KHÔNG được trả lời câu xin lỗi chung. Hãy trả lời theo hướng: "Theo tài liệu hiện có, tôi chưa thấy thông tin cho thấy A dùng để chữa/hỗ trợ B." Sau đó nêu ngắn gọn các công dụng của A thật sự có trong Tài liệu. Không được kết luận tuyệt đối rằng A không chữa B ngoài phạm vi tài liệu.
+4. NẾU KHÔNG CÓ THÔNG TIN: Nếu phần 'Tài liệu' trống rỗng, hoặc hoàn toàn không chứa thông tin về cây thuốc/bệnh/công dụng được hỏi, bạn BẮT BUỘC phải trả về câu sau và KHÔNG ĐƯỢC NÓI GÌ THÊM: "Xin lỗi, tôi chưa có thông tin về vấn đề này trong cơ sở dữ liệu hiện tại."
+5. TUYỆT ĐỐI KHÔNG tự bịa đặt, không suy diễn từ kiến thức y học cá nhân ngoài tài liệu.
+6. RÀNG BUỘC THEO CÂY THUỐC ĐƯỢC HỎI: Nếu câu hỏi nhắc tên một cây thuốc hoặc vị thuốc cụ thể, CHỈ được liệt kê các công dụng/bài thuốc/cách dùng có chứa chính cây thuốc/vị thuốc đó hoặc tên đồng nghĩa của nó trong tài liệu. KHÔNG được liệt kê bài thuốc chỉ cùng bệnh/triệu chứng nhưng không chứa cây thuốc được hỏi.
+7. MỨC ĐỘ CHI TIẾT (QUAN TRỌNG): Khi tài liệu có chứa các cách dùng, bài thuốc, liều lượng (gram), hay các loại cây phối hợp phù hợp trực tiếp với cây thuốc được hỏi, bạn PHẢI liệt kê ĐẦY ĐỦ TẤT CẢ các cách đó. TUYỆT ĐỐI KHÔNG ĐƯỢC tóm tắt qua loa hay bỏ sót bất kỳ một bài thuốc / liều lượng nào.
+8. Định dạng trả lời: NÊN SỬ DỤNG gạch đầu dòng (-) hoặc đánh số (1, 2, 3...) để phân tách các bài thuốc, các cách dùng khác nhau giúp người đọc dễ hiểu. Trình bày rõ ràng, rành mạch.
+9. Trích dẫn nguồn: Cuối câu trả lời (nếu tìm thấy), ghi rõ "Nguồn tham khảo: Tên các tài liệu".
+
+Tài liệu:
+{context}"""),
+    MessagesPlaceholder("chat_history"),
+    ("human", "{input}"),
+])
+
+document_prompt = PromptTemplate(
+    input_variables=["page_content", "source"],
+    template="Nội dung: {page_content}\nNguồn trích dẫn: {source}\n---",
+)
+
+question_answer_chain = create_stuff_documents_chain(
+    llm=llm,
+    prompt=qa_prompt,
+    document_prompt=document_prompt,
+)
+
 def retrieve(state: GraphState):
     """Tìm kiếm tài liệu từ Qdrant (Dùng câu hoàn chỉnh)"""
     print("--- 🔍 ĐANG TÌM KIẾM TÀI LIỆU (QDRANT) ---")
@@ -632,28 +754,39 @@ def retrieve(state: GraphState):
         optimized_query = original_question
 
     fallback_query = get_last_user_message(chat_history)
-    dynamic_retriever = get_filtered_retriever(
+    dynamic_retriever = get_hybrid_retriever(
         qdrant,
         original_question,
         llm,
         fallback_query=fallback_query,
     )
 
-    docs = dynamic_retriever.invoke(optimized_query)
-    docs = sorted(
-        docs,
-        key=lambda doc: (
-            str(doc.metadata.get("source", "")),
-            str(doc.metadata.get("chunk_id", "")),
-            doc.page_content[:80],
-        ),
-    )
+    docs = sort_docs_stably(dynamic_retriever.invoke(optimized_query))
+
+    if not docs:
+        print("   -> [HYBRID] Metadata hints khong tra ve tai lieu. Thu lai bang vector/hybrid search khong filter metadata.")
+        fallback_retriever = qdrant.as_retriever(search_kwargs={"k": SEARCH_K})
+        docs = sort_docs_stably(fallback_retriever.invoke(optimized_query))
+
+    print(f"   -> Da lay len {len(docs)} doan tai lieu lien quan.")
 
     diseases, herbs = extract_entities_from_query(original_question, llm)
     if not diseases and not herbs and fallback_query:
         diseases, herbs = extract_entities_from_query(fallback_query, llm)
 
-    if herbs:
+    if diseases or herbs:
+        docs = sorted(
+            docs,
+            key=lambda doc: (
+                -entity_match_score(doc, diseases, herbs),
+                str(doc.metadata.get("source", "")),
+                str(doc.metadata.get("chunk_id", "")),
+                doc.page_content[:80]
+            )
+        )
+        print("   -> [HYBRID] Sap xep uu tien tai lieu khop entity, khong loai bo tai lieu bang keyword.")
+
+    if False and herbs:
         filtered_docs = []
         for doc in docs:
             herb_candidates = parse_herb_field(doc.metadata.get("herbs", ""))
@@ -772,6 +905,19 @@ def generate(state: GraphState):
 
     if not documents:
         return {
+            "generation": "Xin lỗi, tôi chưa có thông tin về vấn đề này trong cơ sở dữ liệu hiện tại.",
+            "question": question,
+        }
+
+    response_text = question_answer_chain.invoke({
+        "context": documents,
+        "input": question,
+        "chat_history": chat_history,
+    })
+    return {"generation": response_text, "question": question}
+
+    if not documents:
+        return {
             "generation": "Không tìm thấy tài liệu phù hợp.",
             "question": question,
         }
@@ -814,6 +960,10 @@ def generate(state: GraphState):
 def fallback_answer(state: GraphState):
     """Kịch bản Tự sửa sai (Self-Correction) khi tài liệu sai"""
     print("--- KÍCH HOẠT FALLBACK ---")
+    return {
+        "generation": "Xin lỗi, tôi chưa có thông tin về vấn đề này trong cơ sở dữ liệu hiện tại.",
+        "question": state["question"],
+    }
     fallback_msg = (
         "Xin lỗi, tôi chưa tìm thấy thông tin phù hợp trong cơ sở dữ liệu hiện tại.\n"
         "Bạn có thể mô tả rõ hơn triệu chứng hoặc tên bệnh để tôi hỗ trợ tốt hơn."
@@ -880,6 +1030,9 @@ def check_relevance(state: GraphState):
         print(" -> Kết quả: Tài liệu RỖNG (Kích hoạt Fallback)")
         return "fallback"
     
+    print(" -> Ket qua: Co tai lieu, sinh cau tra loi bang prompt QA giong chatbot.py.")
+    return "generate"
+
     structured_llm_grader = llm.with_structured_output(GradeDocuments)
     system = """Bạn là bộ kiểm duyệt tài liệu cho hệ thống RAG y học cổ truyền.
 

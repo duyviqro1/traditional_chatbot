@@ -103,7 +103,9 @@ QDRANT_TIMEOUT = int(
 LLM_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
 SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
-SEARCH_K = 10
+SEARCH_K = 30
+ENTITY_SCORE_WEIGHT = 0.55
+VECTOR_RANK_WEIGHT = 0.45
 
 # Khởi tạo các biến toàn cục
 if not QDRANT_API_KEY:
@@ -370,6 +372,40 @@ def sort_docs_stably(docs):
             doc.page_content[:80]
         )
     )
+
+
+def weighted_rerank_docs(docs, diseases, herbs):
+    if not docs:
+        return []
+
+    entity_scores = [entity_match_score(doc, diseases, herbs) for doc in docs]
+    max_entity_score = max(entity_scores)
+    max_rank = max(len(docs) - 1, 1)
+
+    ranked_docs = []
+    for rank, doc in enumerate(docs):
+        entity_norm = entity_scores[rank] / max_entity_score if max_entity_score else 0
+        vector_rank_norm = 1 - (rank / max_rank)
+        final_score = (
+            ENTITY_SCORE_WEIGHT * entity_norm
+            + VECTOR_RANK_WEIGHT * vector_rank_norm
+        )
+        ranked_docs.append((final_score, entity_scores[rank], vector_rank_norm, doc))
+
+    return [
+        doc
+        for final_score, entity_score, vector_rank_score, doc in sorted(
+            ranked_docs,
+            key=lambda item: (
+                -item[0],
+                -item[1],
+                -item[2],
+                str(item[3].metadata.get("source", "")),
+                str(item[3].metadata.get("chunk_id", "")),
+                item[3].page_content[:80],
+            )
+        )
+    ]
     
 # ========================================================
 # 2. TRUY XUẤT HYBRID VÀ ƯU TIÊN ENTITY MỀM
@@ -378,38 +414,8 @@ def get_filtered_retriever(qdrant_vectorstore, primary_query, llm, fallback_quer
     return get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=fallback_query)
 
 def get_hybrid_retriever(qdrant_vectorstore, primary_query, llm, fallback_query=None):
-    diseases, herbs = extract_entities_from_query(primary_query, llm)
-    if not diseases and not herbs and fallback_query:
-        diseases, herbs = extract_entities_from_query(fallback_query, llm)
-
     search_kwargs = {"k": SEARCH_K}
-    should_conditions = []
-
-    for disease in diseases:
-        should_conditions.append(
-            models.FieldCondition(
-                key="metadata.disease",
-                match=models.MatchText(text=disease)
-            )
-        )
-
-    for herb in herbs:
-        should_conditions.append(
-            models.FieldCondition(
-                key="metadata.herbs",
-                match=models.MatchText(text=herb)
-            )
-        )
-
-    if should_conditions:
-        search_kwargs["filter"] = models.Filter(should=should_conditions)
-
-    if diseases or herbs:
-        print(f"   [HYBRID] -> Metadata should filter | diseases={diseases} | herbs={herbs}")
-    else:
-        print("   [HYBRID] -> General query, no entity hints.")
-
-    print("   [HYBRID] -> Dense+sparse retrieval with metadata should conditions.")
+    print("   [HYBRID] -> Dense+sparse retrieval without metadata should conditions.")
     return qdrant_vectorstore.as_retriever(search_kwargs=search_kwargs)
 
 
@@ -446,12 +452,7 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
         fallback_query=fallback_query
     )
     
-    context_docs = sort_docs_stably(dynamic_retriever.invoke(standalone_query))
-
-    if not context_docs:
-        print("   -> [HYBRID] Metadata hints khong tra ve tai lieu. Thu lai bang vector/hybrid search khong filter metadata.")
-        fallback_retriever = qdrant_vectorstore.as_retriever(search_kwargs={"k": SEARCH_K})
-        context_docs = sort_docs_stably(fallback_retriever.invoke(standalone_query))
+    context_docs = dynamic_retriever.invoke(standalone_query)
     print(f"   -> Đã lấy lên {len(context_docs)} đoạn tài liệu liên quan.")
 
     diseases, herbs = extract_entities_from_query(corrected_question, llm)
@@ -459,16 +460,13 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
         diseases, herbs = extract_entities_from_query(fallback_query, llm)
 
     if diseases or herbs:
-        context_docs = sorted(
-            context_docs,
-            key=lambda doc: (
-                -entity_match_score(doc, diseases, herbs),
-                str(doc.metadata.get("source", "")),
-                str(doc.metadata.get("chunk_id", "")),
-                doc.page_content[:80]
-            )
-        )
-        print("   -> [HYBRID] Sap xep uu tien tai lieu khop entity, khong loai bo tai lieu bang keyword.")
+        context_docs = weighted_rerank_docs(context_docs, diseases, herbs)
+        print("   -> [HYBRID] Sap xep theo weighted score: 0.55 entity_norm + 0.45 vector_rank_norm.")
+        
+    TOP_K_TO_LLM = 10
+    if len(context_docs) > TOP_K_TO_LLM:
+        context_docs = context_docs[:TOP_K_TO_LLM]
+        print(f"   -> [OPTIMIZE] Đã cắt giữ lại Top {TOP_K_TO_LLM} tài liệu tinh túy nhất để đưa cho LLM đọc.")
 
     if context_docs:
         print("   -> [TÀI LIỆU] Danh sách tài liệu đã lấy:")
