@@ -371,6 +371,40 @@ def sort_docs_stably(docs):
         )
     )
     
+def weighted_rerank_docs(docs, diseases, herbs):
+    if not docs:
+        return []
+
+    entity_scores = [entity_match_score(doc, diseases, herbs) for doc in docs]
+    max_entity_score = max(entity_scores) if entity_scores else 0
+    if max_entity_score == 0:
+        max_entity_score = 1 
+
+    max_rank = max(len(docs) - 1, 1)
+
+    ranked_docs = []
+    for rank, doc in enumerate(docs):
+        entity_norm = entity_scores[rank] / max_entity_score
+        vector_rank_norm = 1 - (rank / max_rank)
+        
+        final_score = (0.55 * entity_norm) + (0.45 * vector_rank_norm)
+
+        ranked_docs.append((final_score, entity_scores[rank], vector_rank_norm, doc))
+
+    return [
+        doc
+        for final_score, entity_score, vector_rank_score, doc in sorted(
+            ranked_docs,
+            key=lambda item: (
+                -item[0], 
+                -item[1], 
+                -item[2], 
+                str(item[3].metadata.get("source", "")),
+                str(item[3].metadata.get("chunk_id", "")),
+                item[3].page_content[:80],
+            )
+        )
+    ]
 # ========================================================
 # 2. TRUY XUẤT HYBRID VÀ ƯU TIÊN ENTITY MỀM
 # ========================================================
@@ -446,7 +480,7 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
         fallback_query=fallback_query
     )
     
-    context_docs = sort_docs_stably(dynamic_retriever.invoke(standalone_query))
+    context_docs = dynamic_retriever.invoke(standalone_query)
 
     if not context_docs:
         print("   -> [HYBRID] Metadata hints khong tra ve tai lieu. Thu lai bang vector/hybrid search khong filter metadata.")
@@ -459,16 +493,11 @@ def chat_with_medical_bot(user_question: str, chat_history: list, qdrant_vectors
         diseases, herbs = extract_entities_from_query(fallback_query, llm)
 
     if diseases or herbs:
-        context_docs = sorted(
-            context_docs,
-            key=lambda doc: (
-                -entity_match_score(doc, diseases, herbs),
-                str(doc.metadata.get("source", "")),
-                str(doc.metadata.get("chunk_id", "")),
-                doc.page_content[:80]
-            )
-        )
-        print("   -> [HYBRID] Sap xep uu tien tai lieu khop entity, khong loai bo tai lieu bang keyword.")
+        context_docs = weighted_rerank_docs(context_docs, diseases, herbs)
+        print("   -> [HYBRID] Sắp xếp lại tài liệu theo weighted score (0.55 Entity + 0.45 Vector).")
+    else:
+        # CHỈ GỌI SORT KHI KHÔNG RERANK
+        context_docs = sort_docs_stably(context_docs)
 
     if context_docs:
         print("   -> [TÀI LIỆU] Danh sách tài liệu đã lấy:")
