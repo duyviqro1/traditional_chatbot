@@ -136,8 +136,3 @@ python filter_qdrant.py
 - Chat sessions are stored in Postgres, and history is reused for contextual question rewriting.
 - Prompts are designed to reduce hallucination and prioritize answers grounded in retrieved documents.
 
-## 10. README Scope
-
-This document describes only the traditional RAG part of the repository.
-`agentic_rag.py` is intentionally out of scope.
-
